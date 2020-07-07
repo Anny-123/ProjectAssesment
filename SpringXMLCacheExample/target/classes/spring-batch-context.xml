@@ -1,0 +1,168 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:batch="http://www.springframework.org/schema/batch"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:cache="http://www.springframework.org/schema/cache"
+	xmlns:jpa="http://www.springframework.org/schema/data/jpa"
+	xsi:schemaLocation="http://www.springframework.org/schema/batch http://www.springframework.org/schema/batch/spring-batch-3.0.xsd
+        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.0.xsd
+        http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-4.0.xsd">
+
+
+    <!-- <context:component-scan base-package="com.lti.nordea" /> -->
+  
+<context:annotation-config />
+
+	<import resource="classpath:context-datasource.xml"/>
+	<!-- <import resource="classpath:cache-context.xml"/> -->
+	
+	<bean
+class="org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor"/>
+
+	<!-- JobRepository and JobLauncher are configuration/setup classes -->
+	<bean id="jobRepository"
+		class="org.springframework.batch.core.repository.support.MapJobRepositoryFactoryBean" />
+
+	<bean id="jobLauncher"
+		class="org.springframework.batch.core.launch.support.SimpleJobLauncher">
+		<property name="jobRepository" ref="jobRepository" />
+	</bean>
+
+	<!-- ItemReader which reads data from XML file -->
+	<!-- <bean id="xmlItemReader" class="org.springframework.batch.item.xml.StaxEventItemReader"> 
+		<property name="resource" value="classpath:CustomerInfo.xml" /> <property 
+		name="fragmentRootElementName" value="CstmrCdtTrfInitn" /> <property name="unmarshaller"> 
+		<bean class="org.springframework.oxm.jaxb.Jaxb2Marshaller"> <property name="classesToBeBound"> 
+		<list> <value>com.lti.nordea.model.CstmrCdtTrfInitn</value> </list> </property> 
+		</bean> </property> </bean> -->
+
+	 <bean id="paymentService"
+		class="com.lti.nordea.service.PaymentService">
+		</bean> 
+
+	<bean id="xmlItemReader"
+		class="org.springframework.batch.item.xml.StaxEventItemReader">
+
+		<property name="resource" value="classpath:CustomerInfo.xml" />
+
+		<property name="fragmentRootElementName"
+			value="CstmrCdtTrfInitn" />
+
+		<property name="unmarshaller">
+			<bean class="org.springframework.oxm.xstream.XStreamMarshaller">
+				<property name="autodetectAnnotations" value="true" />
+				<property name="aliases">
+					<map>
+						<entry key="CstmrCdtTrfInitn"
+							value="com.lti.nordea.model.CstmrCdtTrfInitn" />
+					</map>
+				</property>
+
+			</bean>
+		</property>
+	</bean>
+
+
+	<!-- ItemWriter which writes xml EndToEndId data to database -->
+	<bean id="databaseItemWriter"
+		class="org.springframework.batch.item.database.JdbcBatchItemWriter">
+		<property name="dataSource" ref="dataSource" />
+		<property name="sql">
+			<value>
+                <![CDATA[        
+                    insert into PaymentInfo(EndToEndId) 
+                    values (?)
+                ]]>
+			</value>
+		</property>
+
+		<!-- We need a custom setter to handle the conversion between Jodatime 
+			LocalDate and MySQL DATE -->
+		<property name="ItemPreparedStatementSetter">
+			<bean class="com.lti.nordea.dao.PaymentPreparedStatementSetter" />
+		</property>
+	</bean>
+
+
+ <!-- ItemReader which reads data  from database and returns the row mapped by 
+        rowMapper -->
+    <bean id="databaseItemReader"
+        class="org.springframework.batch.item.database.JdbcCursorItemReader">
+ 
+        <property name="dataSource" ref="dataSource" />
+ 
+        <property name="sql"
+            value="SELECT * FROM PaymentInfo" />
+ 
+        <property name="rowMapper">
+            <bean class="com.lti.nordea.dao.PaymentIdRowMapper" />
+        </property>
+ 
+    </bean>
+    
+    <!-- Customized Item Writer to write it into cache -->
+    <bean id="cacheItemWriter"
+		class="com.lti.nordea.writer.CacheItemWriter">
+		</bean>
+	<!-- Optional JobExecutionListener to perform business logic before and 
+		after the job -->
+	<bean id="jobListener"
+		class="com.lti.nordea.jobListener.CstmrPymntJobListener" />
+		
+		<bean id="cacheJobListener"
+		class="com.lti.nordea.jobListener.CstmrPymntCachingJobListener" />
+
+	<!-- Optional ItemProcessor to perform business logic/filtering on the input before writing to database
+		records -->
+	<bean id="itemProcessor"
+		class="com.lti.nordea.jobProcessor.XmlFileParserProcessor" />
+
+	<!-- Step will need a transaction manager -->
+	<bean id="transactionManager"
+		class="org.springframework.batch.support.transaction.ResourcelessTransactionManager" />
+
+
+<bean id="cacheTaskletBean"
+		class="com.lti.nordea.tasks.CacheTasklet" >
+		</bean>
+		
+	<!--  Job  for parsing xml and writing it into database-->
+	<batch:job id="parsingXmlFileToDbJob">
+		<batch:step id="step1">
+			<batch:tasklet transaction-manager="transactionManager">
+				<batch:chunk reader="xmlItemReader"
+					writer="databaseItemWriter" 
+					processor="itemProcessor" commit-interval="10" />
+			</batch:tasklet>
+		</batch:step>
+		<batch:listeners>
+			<batch:listener ref="jobListener" />
+		</batch:listeners>
+	</batch:job>
+	
+		<!--  Job  for reading the database-->
+<!-- 	<batch:job id="readingDbToCacheJob">
+		<batch:step id="dbStep">
+			<batch:tasklet ref="cacheTaskletBean">
+			</batch:tasklet>
+		</batch:step>
+		<batch:listeners>
+			<batch:listener ref="cacheJobListener" />
+		</batch:listeners>
+	</batch:job> -->
+	
+	<!--  Job  for parsing xml and writing it into database-->
+	<batch:job id="readingDbToCacheJob">
+		<batch:step id="dbReadstep">
+			<batch:tasklet transaction-manager="transactionManager">
+				<batch:chunk reader="databaseItemReader"
+					writer="cacheItemWriter" 
+					 commit-interval="10" />
+			</batch:tasklet>
+		</batch:step>
+		<batch:listeners>
+			<batch:listener ref="cacheJobListener" />
+		</batch:listeners>
+	</batch:job>
+
+</beans>          
